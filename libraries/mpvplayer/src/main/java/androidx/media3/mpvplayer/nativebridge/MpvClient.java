@@ -36,6 +36,8 @@ public final class MpvClient implements MPVLib.LogObserver, MpvNativeClient {
   private final Map<Long, PendingRequest> pendingRequests = new HashMap<>();
   private final NativeCommandQueue commandQueue;
   private long nextRequestId = 1;
+  @Nullable private volatile LogListener logListener;
+  private volatile int logLevel = Integer.MAX_VALUE;
 
   public MpvClient() {
     this(DEFAULT_COMMAND_QUEUE);
@@ -201,8 +203,29 @@ public final class MpvClient implements MPVLib.LogObserver, MpvNativeClient {
     if (TextUtils.isEmpty(message)) {
       return;
     }
+    LogListener listener = logListener;
+    if (listener != null && level <= logLevel) {
+      listener.onLogMessage(prefix, level, message);
+    }
     String log = (TextUtils.isEmpty(prefix) ? "" : prefix + ": ") + message;
     lastResult.recordLog(log, level <= MPV_LOG_LEVEL_WARN);
+  }
+
+  /**
+   * Sets the listener that receives native log messages.
+   *
+   * @param level Maximum severity level that is delivered to the listener.
+   * @param listener The listener, or {@code null} to stop delivering messages.
+   */
+  public void setLogListener(int level, @Nullable LogListener listener) {
+    logLevel = level;
+    logListener = listener;
+  }
+
+  /** Receives native log messages. */
+  public interface LogListener {
+
+    void onLogMessage(String prefix, int level, String text);
   }
 
   private boolean run(String action, Runnable runnable) {

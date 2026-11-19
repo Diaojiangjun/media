@@ -23,6 +23,8 @@ import android.content.res.TypedArray;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.Paint;
 import android.graphics.Paint.Join;
 import android.graphics.Paint.Style;
@@ -60,6 +62,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private final TextPaint textPaint;
   private final Paint windowPaint;
   private final Paint bitmapPaint;
+  private float bitmapBrightness = 1.0f;
 
   // Previous input variables.
   @Nullable private CharSequence cueText;
@@ -125,6 +128,22 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     bitmapPaint = new Paint();
     bitmapPaint.setAntiAlias(true);
     bitmapPaint.setFilterBitmap(true);
+  }
+
+  /** Sets the brightness applied to bitmap subtitle cues. */
+  /* package */ void setBitmapBrightness(float brightness) {
+    float clampedBrightness = Math.max(0.0f, Math.min(2.0f, brightness));
+    if (bitmapBrightness == clampedBrightness) {
+      return;
+    }
+    bitmapBrightness = clampedBrightness;
+    if (bitmapBrightness == 1.0f) {
+      bitmapPaint.setColorFilter(null);
+    } else {
+      ColorMatrix colorMatrix = new ColorMatrix();
+      colorMatrix.setScale(bitmapBrightness, bitmapBrightness, bitmapBrightness, 1.0f);
+      bitmapPaint.setColorFilter(new ColorMatrixColorFilter(colorMatrix));
+    }
   }
 
   /**

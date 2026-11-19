@@ -137,6 +137,24 @@ public final class MpvCommandDispatcher {
     return client.command(new String[] {CMD_SCRIPT_BINDING, STATS_GENERAL_PAGE_TOGGLE});
   }
 
+  /** Loads a script at runtime. */
+  public boolean addScript(String path) {
+    return client.command(new String[] {"script-add", path});
+  }
+
+  /** Removes a script by client id or name. */
+  public boolean removeScript(String clientIdOrName) {
+    return client.command(new String[] {"script-remove", clientIdOrName});
+  }
+
+  /** Runs a named input binding. */
+  public boolean runScriptBinding(String binding) {
+    if (TextUtils.isEmpty(binding)) {
+      return false;
+    }
+    return client.command(new String[] {CMD_SCRIPT_BINDING, binding});
+  }
+
   public boolean addSubtitle(MediaItem.SubtitleConfiguration subtitle, boolean select) {
     return client.command(getAddSubtitleCommand(subtitle, select));
   }

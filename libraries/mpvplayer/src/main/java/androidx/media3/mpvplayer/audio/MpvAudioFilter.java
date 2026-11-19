@@ -177,6 +177,26 @@ public final class MpvAudioFilter {
       return addFilter(filter, filter);
     }
 
+    /**
+     * Adds dynamic normalisation.
+     *
+     * @param id Identifier used to address the filter at runtime.
+     * @param gaussianWindow Gaussian window size in seconds.
+     * @param peakTarget Peak target in dB.
+     */
+    @CanIgnoreReturnValue
+    public Builder addDynamicNormalization(String id, double gaussianWindow, double peakTarget) {
+      checkState(!buildCalled);
+      String target = target("dynaudnorm", id);
+      String windowValue = decimal(gaussianWindow, 3);
+      String peakValue = decimal(peakTarget, 1);
+      commands.add(command("g", windowValue, target));
+      commands.add(command("p", peakValue, target));
+      return addFilter(
+          Util.formatInvariant("%s=g=%s:p=%s", target, windowValue, peakValue),
+          Util.formatInvariant("%s=g=0.125:p=4.0", target));
+    }
+
     @CanIgnoreReturnValue
     public Builder addStereoTools(String id, boolean reverse, double balance) {
       checkState(!buildCalled);

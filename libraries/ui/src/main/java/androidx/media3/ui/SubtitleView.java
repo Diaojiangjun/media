@@ -77,6 +77,13 @@ public final class SubtitleView extends FrameLayout {
         float bottomPosition);
 
     /**
+     * Sets the brightness applied to bitmap cues.
+     *
+     * @param brightness The brightness multiplier, where {@code 1.0} leaves cues unchanged.
+     */
+    default void setBitmapBrightness(float brightness) {}
+
+    /**
      * Sets the video bounds within the subtitle view.
      *
      * @param videoViewport The video bounds, or an empty rect to use the output view bounds.
@@ -131,6 +138,7 @@ public final class SubtitleView extends FrameLayout {
   private @Cue.TextSizeType int defaultTextSizeType;
   private float defaultTextSize;
   private float textSizeScale;
+  private float bitmapSubtitleBrightness = 1.0f;
   private float bottomPaddingFraction;
   private float bottomPosition;
   private final Rect videoViewport;
@@ -259,7 +267,23 @@ public final class SubtitleView extends FrameLayout {
     innerSubtitleView = view;
     output = view;
     output.setVideoViewport(videoViewport);
+    output.setBitmapBrightness(bitmapSubtitleBrightness);
     addView(view);
+  }
+
+  /**
+   * Sets the brightness applied to bitmap subtitle cues.
+   *
+   * @param brightness The brightness multiplier, where {@code 1.0} leaves cues unchanged.
+   */
+  public void setBitmapSubtitleBrightness(float brightness) {
+    float clampedBrightness = Math.max(0.0f, Math.min(2.0f, brightness));
+    if (bitmapSubtitleBrightness == clampedBrightness) {
+      return;
+    }
+    bitmapSubtitleBrightness = clampedBrightness;
+    output.setBitmapBrightness(clampedBrightness);
+    updateOutput();
   }
 
   /**

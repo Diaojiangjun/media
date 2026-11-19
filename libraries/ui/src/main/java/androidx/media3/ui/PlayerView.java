@@ -64,6 +64,7 @@ import androidx.core.content.ContextCompat;
 import androidx.media3.common.AdOverlayInfo;
 import androidx.media3.common.AdViewProvider;
 import androidx.media3.common.C;
+import androidx.media3.common.DiscMenuController;
 import androidx.media3.common.ErrorMessageProvider;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackException;
@@ -71,6 +72,7 @@ import androidx.media3.common.Player;
 import androidx.media3.common.Player.DiscontinuityReason;
 import androidx.media3.common.Timeline;
 import androidx.media3.common.Timeline.Period;
+import androidx.media3.common.VideoTransform;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.ViewProvider;
@@ -308,6 +310,8 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
   @Nullable private final View shutterView;
   @Nullable private View surfaceView;
   private boolean surfaceViewIgnoresVideoAspectRatio;
+  private VideoTransform videoTransform;
+  private float videoAspectRatioOverride;
   @Nullable private final SurfaceSyncGroupCompatV34 surfaceSyncGroupV34;
   @Nullable private final ImageView imageView;
   @Nullable private final ImageView artworkView;
@@ -328,6 +332,8 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
   @Nullable private final Object imageOutput;
 
   @Nullable private Player player;
+  @Nullable private Player backendPlayer;
+  @Nullable private DiscMenuController discMenuController;
   private boolean useController;
 
   // At most one of controllerVisibilityListener and legacyControllerVisibilityListener is non-null.
@@ -697,6 +703,56 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
   @Nullable
   public Player getPlayer() {
     return player;
+  }
+
+  /**
+   * Sets the player that renders the video of this view.
+   *
+   * <p>The backend player is normally the player instance the UI media controller forwards to. It
+   * is used by disc menu and subtitle overlays that need direct access to the rendering pipeline.
+   *
+   * @param backendPlayer The backend player, or {@code null} to clear it.
+   */
+  public void setBackendPlayer(@Nullable Player backendPlayer) {
+    this.backendPlayer = backendPlayer;
+  }
+
+  /** Returns the player that renders the video of this view, or {@code null}. */
+  @Nullable
+  public Player getBackendPlayer() {
+    return backendPlayer;
+  }
+
+  /**
+   * Sets the disc menu controller whose overlay is rendered by this view.
+   *
+   * @param discMenuController The controller, or {@code null} to detach it.
+   */
+  public void setDiscMenuController(@Nullable DiscMenuController discMenuController) {
+    this.discMenuController = discMenuController;
+  }
+
+  /** Returns the disc menu controller whose overlay is rendered by this view, or {@code null}. */
+  @Nullable
+  public DiscMenuController getDiscMenuController() {
+    return discMenuController;
+  }
+
+  /**
+   * Dispatches a touch event to the active disc menu overlay.
+   *
+   * @param event The touch event.
+   * @return Whether the event was consumed by the menu.
+   */
+  public boolean dispatchDiscMenuTouchEvent(MotionEvent event) {
+    DiscMenuController controller = discMenuController;
+    if (controller == null || !controller.isActive() || !controller.supportsPointer()) {
+      return false;
+    }
+    if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+      return true;
+    }
+    return true;
   }
 
   /**
@@ -1481,6 +1537,70 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
   @Nullable
   public View getVideoSurfaceView() {
     return surfaceView;
+  }
+
+  /** Returns the current video scale and pan transform. */
+  @UnstableApi
+  public VideoTransform getVideoTransform() {
+    return videoTransform == null ? VideoTransform.DEFAULT : videoTransform;
+  }
+
+  /** Sets the video scale and pan transform. */
+  @UnstableApi
+  public void setVideoTransform(VideoTransform transform) {
+    videoTransform = transform == null ? VideoTransform.DEFAULT : transform;
+    applyVideoTransform(videoTransform);
+  }
+
+  /** Animates to the given video scale and pan transform. */
+  @UnstableApi
+  public void animateVideoTransform(VideoTransform transform, long durationMs) {
+    videoTransform = transform == null ? VideoTransform.DEFAULT : transform;
+    if (contentFrame == null) {
+      return;
+    }
+    contentFrame
+        .animate()
+        .scaleX(videoTransform.scaleX)
+        .scaleY(videoTransform.scaleY)
+        .translationX(videoTransform.panX * contentFrame.getWidth())
+        .translationY(videoTransform.panY * contentFrame.getHeight())
+        .setDuration(Math.max(0, durationMs))
+        .start();
+  }
+
+  /** Finishes any running video transform animation at the current transform. */
+  @UnstableApi
+  public void finishVideoTransformAnimation() {
+    if (contentFrame != null) {
+      contentFrame.animate().cancel();
+    }
+    applyVideoTransform(getVideoTransform());
+  }
+
+  /** Returns the aspect ratio override, or {@code 0} when the media aspect ratio is used. */
+  @UnstableApi
+  public float getVideoAspectRatioOverride() {
+    return videoAspectRatioOverride;
+  }
+
+  /** Overrides the displayed video aspect ratio, or {@code 0} to restore the media ratio. */
+  @UnstableApi
+  public void setVideoAspectRatioOverride(float aspectRatio) {
+    videoAspectRatioOverride = Math.max(0.0f, aspectRatio);
+    if (contentFrame != null && videoAspectRatioOverride > 0.0f) {
+      contentFrame.setAspectRatio(videoAspectRatioOverride);
+    }
+  }
+
+  private void applyVideoTransform(VideoTransform transform) {
+    if (contentFrame == null) {
+      return;
+    }
+    contentFrame.setScaleX(transform.scaleX);
+    contentFrame.setScaleY(transform.scaleY);
+    contentFrame.setTranslationX(transform.panX * contentFrame.getWidth());
+    contentFrame.setTranslationY(transform.panY * contentFrame.getHeight());
   }
 
   /**

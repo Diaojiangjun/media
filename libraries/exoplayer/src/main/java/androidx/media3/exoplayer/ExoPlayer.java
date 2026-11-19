@@ -49,6 +49,7 @@ import androidx.media3.common.PriorityTaskManager;
 import androidx.media3.common.Timeline;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.Tracks;
+import androidx.media3.common.text.SubtitleOffsets;
 import androidx.media3.common.util.Clock;
 import androidx.media3.common.util.ExperimentalApi;
 import androidx.media3.common.util.StuckPlayerException;
@@ -2292,4 +2293,45 @@ public interface ExoPlayer extends Player {
    */
   @UnstableApi
   void removeVideoCodecParametersChangeListener(CodecParametersChangeListener listener);
+
+  /**
+   * Sets the Dolby Vision output policy.
+   *
+   * @param policy The policy, one of the {@code DolbyVisionOutputPolicy} constants.
+   */
+  @UnstableApi
+  default void setDolbyVisionOutputPolicy(int policy) {}
+
+  /**
+   * Enables or disables audio passthrough.
+   *
+   * @param enabled Whether passthrough is enabled.
+   */
+  @UnstableApi
+  default void setAudioPassthroughEnabled(boolean enabled) {}
+
+  /** Returns the subtitle timing offsets applied to the current playback. */
+  @UnstableApi
+  default SubtitleOffsets getSubtitleOffsets() {
+    return SubtitleOffsets.ZERO;
+  }
+
+  /**
+   * Sets the subtitle timing offsets applied to the current playback.
+   *
+   * @param offsets The offsets to apply.
+   */
+  @UnstableApi
+  default void setSubtitleOffsets(SubtitleOffsets offsets) {}
+
+  /**
+   * Seeks to a media item that has been preloaded.
+   *
+   * @param mediaItemIndex The index of the preloaded media item.
+   * @param positionMs The position to seek to, in milliseconds.
+   */
+  @UnstableApi
+  default void seekToPreloadedMediaItem(int mediaItemIndex, long positionMs) {
+    seekTo(mediaItemIndex, positionMs);
+  }
 }

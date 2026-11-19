@@ -2686,10 +2686,14 @@ public class DefaultTrackSelector extends MappingTrackSelector
     ExoTrackSelection.@NullableType Definition[] definitions =
         new ExoTrackSelection.Definition[rendererCount];
 
+    Parameters selectionParameters =
+        resolveParametersForSelection(
+            mappedTrackInfo, mediaPeriodId, timeline, playerParameters);
+
     // Apply overrides once so that selectAllTracks is aware of the overridden tracks.
-    applyTrackSelectionOverrides(mappedTrackInfo, playerParameters, definitions);
-    applyLegacyRendererOverrides(mappedTrackInfo, playerParameters, definitions);
-    applyRendererDisableOverrides(mappedTrackInfo, playerParameters, definitions);
+    applyTrackSelectionOverrides(mappedTrackInfo, selectionParameters, definitions);
+    applyLegacyRendererOverrides(mappedTrackInfo, selectionParameters, definitions);
+    applyRendererDisableOverrides(mappedTrackInfo, selectionParameters, definitions);
 
     // Select remaining tracks based on parameters.
     selectAllTracks(
@@ -2697,13 +2701,13 @@ public class DefaultTrackSelector extends MappingTrackSelector
         mappedTrackInfo,
         rendererFormatSupports,
         rendererMixedMimeTypeAdaptationSupport,
-        playerParameters);
+        selectionParameters);
 
     // Re-apply overrides to enforce them in case selectAllTracks changed them or added additional
     // tracks that shouldn't be enabled according to the overrides.
-    applyTrackSelectionOverrides(mappedTrackInfo, playerParameters, definitions);
-    applyLegacyRendererOverrides(mappedTrackInfo, playerParameters, definitions);
-    applyRendererDisableOverrides(mappedTrackInfo, playerParameters, definitions);
+    applyTrackSelectionOverrides(mappedTrackInfo, selectionParameters, definitions);
+    applyLegacyRendererOverrides(mappedTrackInfo, selectionParameters, definitions);
+    applyRendererDisableOverrides(mappedTrackInfo, selectionParameters, definitions);
 
     @NullableType
     ExoTrackSelection[] rendererTrackSelections =
@@ -2717,8 +2721,8 @@ public class DefaultTrackSelector extends MappingTrackSelector
     for (int i = 0; i < rendererCount; i++) {
       @C.TrackType int rendererType = mappedTrackInfo.getRendererType(i);
       boolean forceRendererDisabled =
-          playerParameters.getRendererDisabled(i)
-              || playerParameters.disabledTrackTypes.contains(rendererType);
+          selectionParameters.getRendererDisabled(i)
+              || selectionParameters.disabledTrackTypes.contains(rendererType);
       boolean rendererEnabled =
           !forceRendererDisabled
               && (mappedTrackInfo.getRendererType(i) == C.TRACK_TYPE_NONE
@@ -2727,15 +2731,16 @@ public class DefaultTrackSelector extends MappingTrackSelector
     }
 
     // Configure audio and video renderers to use tunneling if appropriate.
-    if (playerParameters.tunnelingEnabled) {
+    if (selectionParameters.tunnelingEnabled) {
       maybeConfigureRenderersForTunneling(
           mappedTrackInfo, rendererFormatSupports, rendererConfigurations, rendererTrackSelections);
     }
 
     // Configure audio renderer to use offload if appropriate.
-    if (playerParameters.audioOffloadPreferences.audioOffloadMode != AUDIO_OFFLOAD_MODE_DISABLED) {
+    if (selectionParameters.audioOffloadPreferences.audioOffloadMode
+        != AUDIO_OFFLOAD_MODE_DISABLED) {
       maybeConfigureRendererForOffload(
-          playerParameters,
+          selectionParameters,
           mappedTrackInfo,
           rendererFormatSupports,
           rendererConfigurations,
@@ -2743,6 +2748,25 @@ public class DefaultTrackSelector extends MappingTrackSelector
     }
 
     return Pair.create(rendererConfigurations, rendererTrackSelections);
+  }
+
+  /**
+   * Resolves the parameters used for the upcoming track selection.
+   *
+   * <p>Subclasses can override this method to adjust the parameters for a specific media period.
+   *
+   * @param mappedTrackInfo The mapped track info.
+   * @param mediaPeriodId The media period id being selected for.
+   * @param timeline The current timeline.
+   * @param parameters The current player parameters.
+   * @return The parameters to use for the selection.
+   */
+  protected Parameters resolveParametersForSelection(
+      MappedTrackInfo mappedTrackInfo,
+      MediaPeriodId mediaPeriodId,
+      Timeline timeline,
+      Parameters parameters) {
+    return parameters;
   }
 
   // Track selection prior to overrides and disabled flags being applied.

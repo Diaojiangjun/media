@@ -112,7 +112,7 @@ public class MatroskaExtractor implements Extractor {
   @Target(TYPE_USE)
   @IntDef(
       flag = true,
-      value = {FLAG_DISABLE_SEEK_FOR_CUES, FLAG_EMIT_RAW_SUBTITLE_DATA})
+      value = {FLAG_DISABLE_SEEK_FOR_CUES, FLAG_EMIT_RAW_SUBTITLE_DATA, FLAG_DEFER_SEEK_FOR_CUES})
   public @interface Flags {}
 
   /**
@@ -130,6 +130,14 @@ public class MatroskaExtractor implements Extractor {
    * transcoded to {@link MimeTypes#APPLICATION_MEDIA3_CUES} during extraction.
    */
   public static final int FLAG_EMIT_RAW_SUBTITLE_DATA = 1 << 1; // 2
+
+  /**
+   * Flag to defer seeking for cues.
+   *
+   * <p>This is used for sources whose requests are expensive, such as HTTP streams, where the
+   * extractor avoids an additional request to the cues element.
+   */
+  public static final int FLAG_DEFER_SEEK_FOR_CUES = 1 << 2; // 4
 
   /**
    * @deprecated Use {@link #newFactory(SubtitleParser.Factory)} instead.
@@ -594,7 +602,8 @@ public class MatroskaExtractor implements Extractor {
     this.reader.init(new InnerEbmlProcessor());
     this.subtitleParserFactory = subtitleParserFactory;
     this.perTrackCues = new SparseArray<>();
-    seekForCuesEnabled = (flags & FLAG_DISABLE_SEEK_FOR_CUES) == 0;
+    seekForCuesEnabled =
+        (flags & (FLAG_DISABLE_SEEK_FOR_CUES | FLAG_DEFER_SEEK_FOR_CUES)) == 0;
     parseSubtitlesDuringExtraction = (flags & FLAG_EMIT_RAW_SUBTITLE_DATA) == 0;
     varintReader = new VarintReader();
     chapters = new LongSparseArray<>();

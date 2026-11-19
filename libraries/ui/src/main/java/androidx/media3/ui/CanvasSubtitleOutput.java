@@ -38,13 +38,13 @@ import java.util.Map;
 /* package */ final class CanvasSubtitleOutput extends View implements SubtitleView.Output {
 
   private final List<SubtitlePainter> painters;
-
   private List<Cue> cues;
   private @Cue.TextSizeType int textSizeType;
   private float textSize;
   private CaptionStyleCompat style;
   private float bottomPaddingFraction;
   private float bottomPosition;
+  private float bitmapBrightness = 1.0f;
   private final Rect videoViewport;
 
   public CanvasSubtitleOutput(Context context) {
@@ -79,9 +79,20 @@ import java.util.Map;
     this.bottomPosition = bottomPosition;
     // Ensure we have sufficient painters.
     while (painters.size() < cues.size()) {
-      painters.add(new SubtitlePainter(getContext()));
+      SubtitlePainter painter = new SubtitlePainter(getContext());
+      painter.setBitmapBrightness(bitmapBrightness);
+      painters.add(painter);
     }
     // Invalidate to trigger drawing.
+    invalidate();
+  }
+
+  @Override
+  public void setBitmapBrightness(float brightness) {
+    bitmapBrightness = Math.max(0.0f, Math.min(2.0f, brightness));
+    for (SubtitlePainter painter : painters) {
+      painter.setBitmapBrightness(bitmapBrightness);
+    }
     invalidate();
   }
 

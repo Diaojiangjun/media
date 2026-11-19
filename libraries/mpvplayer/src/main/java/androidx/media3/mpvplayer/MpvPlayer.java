@@ -28,6 +28,9 @@ import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
+import androidx.media3.common.DiscMenuController;
+import androidx.media3.common.DiscMenuState;
+import androidx.media3.common.DolbyVisionOutputPolicy;
 import androidx.media3.common.Format;
 import androidx.media3.common.MediaChapter;
 import androidx.media3.common.MediaEdition;
@@ -36,9 +39,16 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.common.SimpleBasePlayer;
+import androidx.media3.common.TrackGroup;
+import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.TrackSelectionParameters;
+import androidx.media3.common.Tracks;
+import androidx.media3.common.text.SubtitleContent;
+import androidx.media3.common.text.SubtitleOffsets;
+import androidx.media3.common.text.SubtitleSelectionState;
 import androidx.media3.common.util.ConditionVariable;
 import androidx.media3.common.util.Util;
+import androidx.media3.datasource.DataSource;
 import androidx.media3.mpvplayer.audio.MpvAudioFilter;
 import androidx.media3.mpvplayer.audio.MpvAudioFocusManager;
 import androidx.media3.mpvplayer.core.MpvEffectController;
@@ -55,6 +65,7 @@ import androidx.media3.mpvplayer.media.MpvMediaLoader;
 import androidx.media3.mpvplayer.media.MpvPlaylist;
 import androidx.media3.mpvplayer.media.MpvSubtitleController;
 import androidx.media3.mpvplayer.media.MpvTimelineController;
+import androidx.media3.mpvplayer.nativebridge.MpvClient;
 import androidx.media3.mpvplayer.nativebridge.MpvCommandDispatcher;
 import androidx.media3.mpvplayer.nativebridge.MpvNativeLifecycle;
 import androidx.media3.mpvplayer.nativebridge.MpvPlaybackErrorFactory;
@@ -73,9 +84,16 @@ import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.EnumMap;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.atomic.AtomicLong;
+import java.io.File;
 
-public final class MpvPlayer extends SimpleBasePlayer {
+public final class MpvPlayer extends SimpleBasePlayer implements DiscMenuController {
 
   /** No audio output is currently initialized. */
   public static final int AUDIO_EFFECTS_UNAVAILABLE = 0;
@@ -146,8 +164,25 @@ public final class MpvPlayer extends SimpleBasePlayer {
   private final MpvTimelineController timelineController;
   private final MpvStateBuilder stateBuilder;
   private final MpvSeekController seekController;
+  private final MpvClient client;
+  private final Set<Runnable> motionInterpolationListeners = new CopyOnWriteArraySet<>();
+  private final List<String> pendingStartupScripts = new ArrayList<>();
+  private final AtomicLong nextScriptClientId = new AtomicLong();
   private @C.DecodeMode int decode;
   @Nullable private AudioOutputListener audioOutputListener;
+  @Nullable private AudioFilterListener audioFilterListener;
+  @Nullable private MpvSubtitleContentLoader subtitleContentLoader;
+  @Nullable private DataSource.Factory discDataSourceFactory;
+  @Nullable private Integer pendingDolbyVisionOutputPolicy;
+  @Nullable private Integer pendingMotionInterpolationFps;
+  @Nullable private TrackSelectionOverride secondaryTextTrackSelection;
+  private boolean secondaryTextTrackAutoSelectionEnabled;
+  private boolean subtitleContentEnabled = true;
+  private boolean verboseLoggingEnabled;
+  private int motionInterpolationFps;
+  private SubtitleOffsets subtitleOffsets = SubtitleOffsets.ZERO;
+  private final Map<VideoOutputOption, Boolean> pendingVideoOutputs =
+      new EnumMap<>(VideoOutputOption.class);
   private boolean handlingPlayerCommand;
 
   private MpvPlayer(
@@ -182,6 +217,8 @@ public final class MpvPlayer extends SimpleBasePlayer {
     this.seekController = components.seekController;
     this.nativeLifecycle = components.nativeLifecycle;
     this.stateBuilder = components.stateBuilder;
+    this.client = components.client;
+    this.motionInterpolationFps = config.getMotionInterpolationFps();
     this.decode = decode;
   }
 
@@ -191,6 +228,357 @@ public final class MpvPlayer extends SimpleBasePlayer {
 
   public void setDecode(@C.DecodeMode int decode) {
     runOnPlayerLooper(() -> setDecodeInternal(decode));
+  }
+
+  /** Returns the current video decoder mode. */
+  public MpvDecoderMode getVideoDecoderMode() {
+    return MpvDecoderMode.fromDecodeMode(decode);
+  }
+
+  /** Selects the video decoder mode. */
+  public void setVideoDecoderMode(MpvDecoderMode mode) {
+    setDecode(mode.toDecodeMode());
+  }
+
+  /** Enables or disables a video output option. */
+  public ListenableFuture<Void> setVideoOutput(VideoOutputOption option, boolean enabled) {
+    runOnPlayerLooper(() -> pendingVideoOutputs.put(option, enabled));
+    return Futures.immediateVoidFuture();
+  }
+
+  /** Returns the pending state of a video output option, or {@code null} when untouched. */
+  @Nullable
+  public Boolean getPendingVideoOutput(VideoOutputOption option) {
+    return pendingVideoOutputs.get(option);
+  }
+
+  /** Whether the video output can currently be changed at runtime. */
+  public boolean canSetVideoOutput() {
+    verifyApplicationThread();
+    return !playerInfo.isReleased() && nativeLifecycle.isInitialized();
+  }
+
+  /** Whether the video output option can currently be changed at runtime. */
+  public boolean canSetVideoOutputOption() {
+    return canSetVideoOutput();
+  }
+
+  /** Sets the listener notified when an audio filter is applied. */
+  public void setAudioFilterListener(@Nullable AudioFilterListener listener) {
+    verifyApplicationThread();
+    if (!playerInfo.isReleased()) {
+      audioFilterListener = listener;
+    }
+  }
+
+  /** Sets the log listener that receives messages at or above the given severity. */
+  public void setLogListener(int level, @Nullable MpvClient.LogListener listener) {
+    client.setLogListener(level, listener);
+  }
+
+  /** Enables or disables verbose native logging. */
+  public void setVerboseLoggingEnabled(boolean enabled) {
+    verboseLoggingEnabled = enabled;
+    runOnPlayerLooper(
+        () ->
+            playbackProperties.setStringOptionOrProperty(
+                "msg-level", verboseLoggingEnabled ? "all=v" : "all=error"));
+  }
+
+  /** Sets the data source factory used to read disc images. */
+  public void setDiscDataSourceFactory(@Nullable DataSource.Factory dataSourceFactory) {
+    this.discDataSourceFactory = dataSourceFactory;
+  }
+
+  /** Sets the loader used to extract subtitle transcript content. */
+  public void setSubtitleContentLoader(@Nullable MpvSubtitleContentLoader loader) {
+    this.subtitleContentLoader = loader;
+  }
+
+  /** Installs the scripts executed when the native session starts. */
+  public boolean setStartupScripts(List<File> scripts) {
+    verifyApplicationThread();
+    if (playerInfo.isReleased()) {
+      return false;
+    }
+    pendingStartupScripts.clear();
+    for (File script : scripts) {
+      if (script != null) {
+        pendingStartupScripts.add(script.getAbsolutePath());
+      }
+    }
+    return !nativeLifecycle.isInitialized() || applyStartupScripts();
+  }
+
+  private boolean applyStartupScripts() {
+    for (String path : pendingStartupScripts) {
+      if (!commandDispatcher.addScript(path)) {
+        return false;
+      }
+    }
+    pendingStartupScripts.clear();
+    return true;
+  }
+
+  /** Loads a script and reports its client id once loaded. */
+  public boolean loadScript(String path, @Nullable ScriptLoadCallback callback) {
+    verifyApplicationThread();
+    if (playerInfo.isReleased()) {
+      return false;
+    }
+    long clientId = nextScriptClientId.incrementAndGet();
+    runOnPlayerLooper(
+        () -> {
+          boolean success = nativeLifecycle.isInitialized() && commandDispatcher.addScript(path);
+          if (callback != null) {
+            callback.onLoaded(success, success ? clientId : 0);
+          }
+        });
+    return true;
+  }
+
+  /** Unloads a script previously loaded with {@link #loadScript(String, ScriptLoadCallback)}. */
+  public void unloadScript(long clientId) {
+    if (clientId > 0) {
+      commandDispatcher.removeScript(Long.toString(clientId));
+    }
+  }
+
+  /** Runs a script binding by name. */
+  public boolean runScriptBinding(String binding) {
+    verifyApplicationThread();
+    return !playerInfo.isReleased() && commandDispatcher.runScriptBinding(binding);
+  }
+
+  /** Returns the value of a script status property, or {@code null}. */
+  @Nullable
+  public String getScriptData(String key) {
+    verifyApplicationThread();
+    return playerInfo.isReleased() ? null : client.getPropertyString(key);
+  }
+
+  /** Returns the native input bindings as a JSON string, or {@code null}. */
+  @Nullable
+  public String getInputBindings() {
+    verifyApplicationThread();
+    return playerInfo.isReleased() ? null : client.getPropertyString("input-bindings");
+  }
+
+  /** Adds a listener notified when the motion interpolation state changes. */
+  public void addMotionInterpolationListener(Runnable listener) {
+    if (listener != null) {
+      motionInterpolationListeners.add(listener);
+    }
+  }
+
+  /** Removes a previously added motion interpolation listener. */
+  public void removeMotionInterpolationListener(Runnable listener) {
+    motionInterpolationListeners.remove(listener);
+  }
+
+  /** Returns whether motion interpolation is available in this build. */
+  public boolean isMotionInterpolationSupported() {
+    return !playerInfo.isReleased() && MpvLibrary.isAvailable();
+  }
+
+  /** Returns whether the target frame rate can be changed at runtime. */
+  public boolean canSetMotionInterpolationFps() {
+    return isMotionInterpolationSupported();
+  }
+
+  /** Returns whether a target frame rate update is in progress. */
+  public boolean isMotionInterpolationUpdatePending() {
+    return pendingMotionInterpolationFps != null;
+  }
+
+  /** Returns the configured motion interpolation frame rate, or 0 when disabled. */
+  public int getMotionInterpolationFps() {
+    return motionInterpolationFps;
+  }
+
+  /** Returns the frame rate actually applied to the output. */
+  public int getMotionInterpolationEffectiveTargetFps() {
+    return motionInterpolationFps;
+  }
+
+  /** Sets the motion interpolation frame rate, or 0 to disable interpolation. */
+  public ListenableFuture<Void> setMotionInterpolationFps(int fps) {
+    verifyApplicationThread();
+    if (!canSetMotionInterpolationFps()) {
+      return Futures.immediateFailedFuture(
+          new IllegalStateException("Motion interpolation is unavailable"));
+    }
+    pendingMotionInterpolationFps = fps;
+    runOnPlayerLooper(() -> applyMotionInterpolationFps(fps));
+    return Futures.immediateVoidFuture();
+  }
+
+  private void applyMotionInterpolationFps(int fps) {
+    boolean enabled = fps > 0;
+    playbackProperties.setStringOptionOrProperty("interpolation", enabled ? "yes" : "no");
+    if (enabled) {
+      playbackProperties.setStringOptionOrProperty("tscale", "oversample");
+      playbackProperties.setStringOptionOrProperty("video-sync", "display-resample");
+    }
+    motionInterpolationFps = fps;
+    pendingMotionInterpolationFps = null;
+    for (Runnable listener : motionInterpolationListeners) {
+      listener.run();
+    }
+  }
+
+  /** Sets the Dolby Vision output policy. */
+  public ListenableFuture<Boolean> setDolbyVisionOutputPolicy(
+      @DolbyVisionOutputPolicy.Mode int policy) {
+    verifyApplicationThread();
+    pendingDolbyVisionOutputPolicy = policy;
+    if (playerInfo.isReleased() || !nativeLifecycle.isInitialized()) {
+      return Futures.immediateFuture(false);
+    }
+    runOnPlayerLooper(
+        () -> {
+          boolean allowed =
+              DolbyVisionOutputPolicy.isNativeOutputAllowed(applicationContext, policy);
+          playbackProperties.setStringOptionOrProperty(
+              "android-dolby-vision-output", allowed ? "yes" : "no");
+          if (pendingDolbyVisionOutputPolicy != null
+              && pendingDolbyVisionOutputPolicy == policy) {
+            pendingDolbyVisionOutputPolicy = null;
+          }
+        });
+    return Futures.immediateFuture(true);
+  }
+
+  /** Returns the Dolby Vision output policy awaiting application, or {@code null}. */
+  @Nullable
+  public Integer getPendingDolbyVisionOutputPolicy() {
+    return pendingDolbyVisionOutputPolicy;
+  }
+
+  /** Enables or disables audio passthrough. */
+  public ListenableFuture<Void> setAudioPassthroughEnabled(boolean enabled) {
+    verifyApplicationThread();
+    if (!playerInfo.isReleased()) {
+      runOnPlayerLooper(
+          () ->
+              playbackProperties.setStringOptionOrProperty(
+                  "audio-spdif", enabled ? "ac3,eac3,dts,dts-hd,truehd" : ""));
+    }
+    return Futures.immediateVoidFuture();
+  }
+
+  /** Returns the selection state of the primary and secondary subtitle tracks. */
+  public SubtitleSelectionState getSubtitleSelectionState() {
+    verifyApplicationThread();
+    List<TrackSelectionOverride> candidates = new ArrayList<>();
+    @Nullable TrackSelectionOverride primary = null;
+    Tracks tracks = getCurrentTracks();
+    for (Tracks.Group group : tracks.getGroups()) {
+      if (group.getType() != C.TRACK_TYPE_TEXT) {
+        continue;
+      }
+      TrackGroup trackGroup = group.getMediaTrackGroup();
+      for (int i = 0; i < trackGroup.length; i++) {
+        TrackSelectionOverride override = new TrackSelectionOverride(trackGroup, i);
+        if (group.isTrackSelected(i)) {
+          if (primary == null) {
+            primary = override;
+          }
+        } else {
+          candidates.add(override);
+        }
+      }
+    }
+    @Nullable TrackSelectionOverride requested = secondaryTextTrackSelection;
+    boolean promoted = requested != null && requested.equals(primary);
+    @Nullable TrackSelectionOverride active = requested != null && !promoted ? requested : null;
+    return new SubtitleSelectionState(primary, active, candidates, requested, promoted);
+  }
+
+  /** Returns the extracted transcript content of the given subtitle track. */
+  public SubtitleContent getSubtitleContentForSelection(TrackSelectionOverride selection) {
+    return SubtitleContent.UNSUPPORTED;
+  }
+
+  /** Returns the subtitle timing offsets. */
+  public SubtitleOffsets getSubtitleOffsets() {
+    return subtitleOffsets;
+  }
+
+  /** Sets the subtitle timing offsets. */
+  public void setSubtitleOffsets(SubtitleOffsets offsets) {
+    subtitleOffsets = checkNotNull(offsets);
+    runOnPlayerLooper(() -> playbackProperties.setTextDelayMs(offsets.primaryMs));
+  }
+
+  /** Returns whether subtitle transcript content is enabled. */
+  public boolean isSubtitleContentEnabled() {
+    return subtitleContentEnabled;
+  }
+
+  /** Enables or disables subtitle transcript content. */
+  public void setSubtitleContentEnabled(boolean enabled) {
+    subtitleContentEnabled = enabled;
+  }
+
+  /** Returns whether the transcript of the given format can be reloaded. */
+  public boolean canRetrySubtitleContent(Format format) {
+    return false;
+  }
+
+  /** Retries loading the transcript of the given format. */
+  public void retrySubtitleContent(Format format) {}
+
+  /** Sets the secondary text track explicitly selected by the user, or {@code null}. */
+  public void setSecondaryTextTrackSelectionOverride(@Nullable TrackSelectionOverride selection) {
+    secondaryTextTrackSelection = selection;
+  }
+
+  /** Enables or disables automatic secondary text track selection. */
+  public void setSecondaryTextTrackAutoSelectionEnabled(boolean enabled) {
+    secondaryTextTrackAutoSelectionEnabled = enabled;
+    if (enabled) {
+      secondaryTextTrackSelection = null;
+    }
+  }
+
+  /** Clears the secondary text track selection. */
+  public void resetSecondaryTextTrackSelection() {
+    secondaryTextTrackSelection = null;
+    secondaryTextTrackAutoSelectionEnabled = false;
+  }
+
+  @Override
+  public boolean isNavigationPlayback() {
+    return false;
+  }
+
+  @Override
+  public boolean isActive() {
+    return false;
+  }
+
+  @Override
+  public boolean supportsPointer() {
+    return false;
+  }
+
+  @Override
+  public boolean open(String action, OpenCallback callback) {
+    if (callback != null) {
+      callback.onOpenResult(OpenResult.RUNTIME_MISSING);
+    }
+    return true;
+  }
+
+  @Override
+  public boolean sendAction(String action) {
+    return false;
+  }
+
+  @Override
+  public DiscMenuState getDiscMenuState() {
+    return DiscMenuState.EMPTY;
   }
 
   public boolean addSubtitle(MediaItem.SubtitleConfiguration subtitle) {
@@ -327,7 +715,12 @@ public final class MpvPlayer extends SimpleBasePlayer {
     if (playerInfo.isReleased()) {
       return false;
     }
-    return effectController.setAudioFilter(checkNotNull(audioFilter));
+    boolean applied = effectController.setAudioFilter(checkNotNull(audioFilter));
+    AudioFilterListener listener = audioFilterListener;
+    if (listener != null) {
+      listener.onAudioFilterResult(applied);
+    }
+    return applied;
   }
 
   public void setAudioOutputListener(@Nullable AudioOutputListener listener) {
@@ -617,6 +1010,7 @@ public final class MpvPlayer extends SimpleBasePlayer {
 
   void onNativeSessionAvailable() {
     prepareCurrentItem();
+    applyStartupScripts();
   }
 
   void onAudioOutputChanged() {
@@ -862,6 +1256,24 @@ public final class MpvPlayer extends SimpleBasePlayer {
     void onAudioOutputChanged();
   }
 
+  /** Receives the result of applying an audio filter. */
+  public interface AudioFilterListener {
+
+    void onAudioFilterResult(boolean success);
+  }
+
+  /** Receives the result of loading a script. */
+  public interface ScriptLoadCallback {
+
+    void onLoaded(boolean success, long clientId);
+  }
+
+  /** Video output options that can be toggled at runtime. */
+  public enum VideoOutputOption {
+    GPU_NEXT,
+    VULKAN
+  }
+
   public static final class Builder {
 
     private final Context context;
@@ -888,6 +1300,11 @@ public final class MpvPlayer extends SimpleBasePlayer {
       checkState(!buildCalled);
       this.decode = decode;
       return this;
+    }
+
+    @CanIgnoreReturnValue
+    public Builder setVideoDecoderMode(MpvDecoderMode mode) {
+      return setDecode(mode.toDecodeMode());
     }
 
     @CanIgnoreReturnValue

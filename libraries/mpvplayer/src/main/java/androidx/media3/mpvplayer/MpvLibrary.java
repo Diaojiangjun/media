@@ -15,11 +15,19 @@
  */
 package androidx.media3.mpvplayer;
 
+import androidx.annotation.Nullable;
 import androidx.media3.common.MediaLibraryInfo;
 import androidx.media3.common.util.LibraryLoader;
 
 /** Configures and queries the underlying mpv native libraries. */
 public final class MpvLibrary {
+
+  /** Loads the mpv native libraries from a custom source. */
+  public interface LibraryLoaderProvider {
+
+    /** Returns whether the libraries are now available. */
+    boolean load();
+  }
 
   private static final LibraryLoader LOADER =
       new LibraryLoader("mpv", "player") {
@@ -28,6 +36,8 @@ public final class MpvLibrary {
           System.loadLibrary(name);
         }
       };
+
+  @Nullable private static volatile LibraryLoaderProvider customLoader;
 
   static {
     MediaLibraryInfo.registerModule("media3.mpvplayer");
@@ -45,8 +55,27 @@ public final class MpvLibrary {
     LOADER.setLibraries(libraries);
   }
 
+  /**
+   * Sets a loader that loads the mpv native libraries from an application-provided location.
+   *
+   * <p>This must be called before instantiating an {@link MpvPlayer}.
+   *
+   * @param loader The loader, or {@code null} to restore the default behaviour.
+   */
+  public static void setLibraryLoader(@Nullable LibraryLoaderProvider loader) {
+    customLoader = loader;
+  }
+
   /** Returns whether the underlying native libraries are available, loading them if necessary. */
   public static boolean isAvailable() {
+    LibraryLoaderProvider loader = customLoader;
+    if (loader != null) {
+      try {
+        return loader.load();
+      } catch (RuntimeException | LinkageError error) {
+        return false;
+      }
+    }
     return LOADER.isAvailable();
   }
 }

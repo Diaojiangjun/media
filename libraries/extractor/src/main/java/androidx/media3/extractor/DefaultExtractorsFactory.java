@@ -115,6 +115,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @UnstableApi
 public final class DefaultExtractorsFactory implements ExtractorsFactory {
 
+  private java.util.Map<String, String> mp4ClearKeys = java.util.Collections.emptyMap();
+
   // Extractors order is optimized according to
   // https://docs.google.com/document/d/1w2mKaWMxfz2Ei8-LdxqbPs1VLe_oudB-eryXXw9OvQQ.
   // The JPEG extractor appears after audio/video extractors because we expect audio/video input to
@@ -165,6 +167,7 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
   private @AmrExtractor.Flags int amrFlags;
   private @FlacExtractor.Flags int flacFlags;
   private @MatroskaExtractor.Flags int matroskaFlags;
+  private @MatroskaExtractor.Flags int matroskaHttpFlags;
   private @Mp4Extractor.Flags int mp4Flags;
   private @FragmentedMp4Extractor.Flags int fragmentedMp4Flags;
   private @Mp3Extractor.Flags int mp3Flags;
@@ -304,6 +307,20 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
   }
 
   /**
+   * Sets additional flags for {@link MatroskaExtractor} instances used for HTTP sources.
+   *
+   * @see MatroskaExtractor#MatroskaExtractor(SubtitleParser.Factory, int)
+   * @param flags The flags to use.
+   * @return The factory, for convenience.
+   */
+  @CanIgnoreReturnValue
+  public synchronized DefaultExtractorsFactory setMatroskaExtractorFlagsForHttpSources(
+      @MatroskaExtractor.Flags int flags) {
+    this.matroskaHttpFlags = flags;
+    return this;
+  }
+
+  /**
    * Sets flags for {@link Mp4Extractor} instances created by the factory.
    *
    * @see Mp4Extractor#Mp4Extractor(SubtitleParser.Factory, int)
@@ -398,6 +415,22 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
       int timestampSearchBytes) {
     tsTimestampSearchBytes = timestampSearchBytes;
     return this;
+  }
+
+  /** Sets MP4 ClearKey licenses used by the extractors. */
+  @CanIgnoreReturnValue
+  public synchronized DefaultExtractorsFactory setMp4ClearKeys(
+      java.util.Map<String, String> clearKeys) {
+    this.mp4ClearKeys =
+        clearKeys == null
+            ? java.util.Collections.emptyMap()
+            : new java.util.LinkedHashMap<>(clearKeys);
+    return this;
+  }
+
+  /** Returns the configured MP4 ClearKey licenses. */
+  public synchronized java.util.Map<String, String> getMp4ClearKeys() {
+    return mp4ClearKeys;
   }
 
   /**
@@ -543,6 +576,7 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
             new MatroskaExtractor(
                 subtitleParserFactory,
                 matroskaFlags
+                    | matroskaHttpFlags
                     | (textTrackTranscodingEnabled
                         ? 0
                         : MatroskaExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA)));

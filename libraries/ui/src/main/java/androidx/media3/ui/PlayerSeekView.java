@@ -90,6 +90,14 @@ public class PlayerSeekView extends FrameLayout
   private long[] adGroupTimesMs;
   private boolean[] playedAdGroups;
   private long currentDuration;
+  @Nullable private DurationSupplier durationSupplier;
+
+  /** Supplies the duration shown by this view when it differs from the player duration. */
+  public interface DurationSupplier {
+
+    /** Returns the duration in milliseconds, or a non-positive value to use the player duration. */
+    long getDurationMs();
+  }
   private long currentWindowOffset;
   @Nullable private long[] chapterTimesMs;
   @Nullable private String[] chapterLabels;
@@ -154,6 +162,16 @@ public class PlayerSeekView extends FrameLayout
     resetView();
   }
 
+  /**
+   * Sets a supplier used to override the duration shown by this view.
+   *
+   * @param durationSupplier The supplier, or {@code null} to use the player duration.
+   */
+  public void setDurationSupplier(@Nullable DurationSupplier durationSupplier) {
+    this.durationSupplier = durationSupplier;
+    updateTimeline();
+  }
+
   /** Sets the player whose progress should be shown. */
   public void setPlayer(@Nullable Player player) {
     checkState(Looper.myLooper() == Looper.getMainLooper());
@@ -207,9 +225,16 @@ public class PlayerSeekView extends FrameLayout
         durationUs = msToUs(durationMs);
       }
     }
-    updateDuration(Util.usToMs(durationUs), adGroupCount);
-    updateProgress();
-  }
+    long durationMs = Util.usToMs(durationUs);
+    @Nullable DurationSupplier supplier = durationSupplier;
+    if (supplier != null) {
+      long suppliedDurationMs = supplier.getDurationMs();
+      if (suppliedDurationMs > 0) {
+        durationMs = suppliedDurationMs;
+      }
+    }
+    updateDuration(durationMs, adGroupCount);
+    updateProgress();  }
 
   private void updateProgress() {
     removeCallbacks(updateProgressAction);

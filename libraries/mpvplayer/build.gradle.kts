@@ -20,6 +20,7 @@ android {
   namespace = "androidx.media3.mpvplayer"
 
   sourceSets {
+    getByName("main").jniLibs.setSrcDirs(listOf("src/main/jniUnified"))
     getByName("androidTest").assets.directories.add("../test_data/src/test/assets/media/wav")
   }
 }

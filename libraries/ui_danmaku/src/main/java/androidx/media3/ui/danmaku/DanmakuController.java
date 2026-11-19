@@ -75,6 +75,7 @@ public final class DanmakuController {
   private final PlayerListener playerListener;
   private final List<Parser> parsers = new ArrayList<>();
   private final List<Fetcher> fetchers = new ArrayList<>();
+  private List<Danmaku> items = new ArrayList<>();
   private final Handler mainHandler = new Handler(Looper.getMainLooper());
   private final DanmakuSourceLoader sourceLoader = new DanmakuSourceLoader(mainHandler);
   private final DanmakuSegmentLoader segmentLoader;
@@ -364,24 +365,28 @@ public final class DanmakuController {
   /** Replaces the current source with {@code items}. */
   public void setItems(List<Danmaku> items) {
     checkNotNull(items);
+    this.items = new ArrayList<>(items);
     dataSourceUri = null;
     dataSourceDirty = false;
     replaceItems(items);
   }
 
   private void setLoadedItems(Uri uri, Danmaku[] items) {
+    this.items = new ArrayList<>(java.util.Arrays.asList(items));
     replaceSortedItems(items);
     dataSourceUri = uri;
     dataSourceDirty = false;
   }
 
   private void replaceItems(List<Danmaku> items) {
+    this.items = new ArrayList<>(items);
     prepareTimelineReplacement();
     timeline.setItems(items);
     finishTimelineReplacement();
   }
 
   private void replaceSortedItems(Danmaku[] items) {
+    this.items = new ArrayList<>(java.util.Arrays.asList(items));
     prepareTimelineReplacement();
     timeline.setSortedItems(items);
     finishTimelineReplacement();
@@ -402,6 +407,7 @@ public final class DanmakuController {
 
   /** Clears all loaded and displayed items. */
   public void clearItems() {
+    items = new ArrayList<>();
     dataSourceUri = null;
     dataSourceDirty = false;
     loadGeneration.incrementAndGet();
@@ -410,6 +416,11 @@ public final class DanmakuController {
     if (danmakuView != null) {
       danmakuView.clear();
     }
+  }
+
+  /** Returns the currently loaded or displayed items. */
+  public List<Danmaku> getItems() {
+    return new ArrayList<>(items);
   }
 
   /** Sends text at the current playback position. */

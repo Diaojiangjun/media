@@ -35,7 +35,12 @@ final class MpvSubtitleOptionDefaults {
   private static final String OPT_SECONDARY_SUBTITLE_ASS_OVERRIDE = "secondary-sub-ass-override";
   private static final String OPT_SECONDARY_SUBTITLE_POSITION = "secondary-sub-pos";
   private static final String OPT_SECONDARY_SUBTITLE_TRACK = "secondary-sid";
+  private static final String OPT_SECONDARY_SUBTITLE_OFFSET_Y = "secondary-sub-offset-y";
   private static final String OPT_SUBTITLE_ASS_OVERRIDE = "sub-ass-override";
+  private static final String OPT_SUBTITLE_BITMAP_BRIGHTNESS = "sub-brightness";
+  private static final String OPT_SUBTITLE_FONT = "sub-font";
+  private static final String OPT_SUBTITLE_FONTS_DIR = "sub-fonts-dir";
+  private static final String OPT_SUBTITLE_OFFSET_Y = "sub-offset-y";
   private static final String OPT_SUBTITLE_BACKGROUND_COLOR = "sub-back-color";
   private static final String OPT_SUBTITLE_BORDER_STYLE = "sub-border-style";
   private static final String OPT_SUBTITLE_COLOR = "sub-color";
@@ -72,6 +77,19 @@ final class MpvSubtitleOptionDefaults {
     }
     if (options.isSecondarySubtitleConfigured()) {
       addSecondarySubtitleOptions(builder, options);
+    }
+    if (options.getFontsDirectory() != null) {
+      addSubtitleString(builder, OPT_SUBTITLE_FONTS_DIR, options.getFontsDirectory());
+    }
+    if (options.getFontFamily() != null) {
+      addSubtitleString(builder, OPT_SUBTITLE_FONT, options.getFontFamily());
+    }
+    if (options.isVerticalOffsetSet()) {
+      addSubtitleDouble(builder, OPT_SUBTITLE_OFFSET_Y, options.getVerticalOffset());
+    }
+    if (options.getBitmapBrightness() != 1.0) {
+      addSubtitleDouble(
+          builder, OPT_SUBTITLE_BITMAP_BRIGHTNESS, options.getBitmapBrightness());
     }
     return builder;
   }
@@ -173,6 +191,8 @@ final class MpvSubtitleOptionDefaults {
     if (track != SECONDARY_TRACK_OFF) {
       addSubtitleDouble(builder, OPT_SECONDARY_SUBTITLE_POSITION, options.getSecondaryPosition());
     }
+    addSubtitleDouble(
+        builder, OPT_SECONDARY_SUBTITLE_OFFSET_Y, options.getSecondaryVerticalOffset());
   }
 
   private static String getSecondarySubtitleTrackValue(int track) {

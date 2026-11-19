@@ -948,6 +948,17 @@ public interface Player {
     default void onMediaEditionsChanged(List<MediaEdition> editions) {}
 
     /**
+     * Called when the value of {@link Player#getDiscMenuState()} changes.
+     *
+     * <p>{@link #onEvents(Player, Events)} will also be called to report this event along with
+     * other events that happen in the same {@link Looper} message queue iteration.
+     *
+     * @param state The new disc menu state. Never null.
+     */
+    @UnstableApi
+    default void onDiscMenuStateChanged(DiscMenuState state) {}
+
+    /**
      * Called when the value of {@link Player#getMediaMetadata()} changes.
      *
      * <p>This method may be called multiple times in quick succession.
@@ -1770,6 +1781,9 @@ public interface Player {
 
   /** {@link #getCurrentMediaEditions()} changed. */
   @UnstableApi int EVENT_MEDIA_EDITIONS_CHANGED = 32;
+
+  /** {@link #getDiscMenuState()} changed. */
+  @UnstableApi int EVENT_DISC_MENU_STATE_CHANGED = 33;
 
   /**
    * Commands that indicate which method calls are currently permitted on a particular {@code
@@ -3053,6 +3067,16 @@ public interface Player {
   @UnstableApi
   default boolean selectEdition(MediaEdition edition) {
     return false;
+  }
+
+  /**
+   * Returns the disc menu state of the current playback.
+   *
+   * @see Listener#onDiscMenuStateChanged(DiscMenuState)
+   */
+  @UnstableApi
+  default DiscMenuState getDiscMenuState() {
+    return DiscMenuState.EMPTY;
   }
 
   /**

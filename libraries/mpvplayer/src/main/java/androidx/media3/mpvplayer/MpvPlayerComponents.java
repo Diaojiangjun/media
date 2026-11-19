@@ -78,10 +78,12 @@ final class MpvPlayerComponents {
   final MpvSeekController seekController;
   final MpvNativeLifecycle nativeLifecycle;
   final MpvStateBuilder stateBuilder;
+  final MpvClient client;
 
   private MpvPlayerComponents(
       Context applicationContext, MpvPlayer player, MpvPlayerConfig config, Handler handler) {
     MpvClient client = new MpvClient();
+    this.client = client;
     MpvLoadGeneration loadGeneration = new MpvLoadGeneration();
     MpvNativeState nativeState = new MpvNativeState();
     this.options = new MpvOptions(applicationContext, config);

@@ -30,12 +30,16 @@ android {
 
   defaultConfig { ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") } }
 
-  sourceSets { getByName("androidTest").assets.directories.add("../test_data/src/test/assets") }
+  sourceSets {
+    getByName("main").jniLibs.setSrcDirs(listOf("src/main/jniUnified"))
+    getByName("androidTest").assets.directories.add("../test_data/src/test/assets")
+  }
 }
 
-// Configure the native build only if ffmpeg is present to avoid gradle sync
-// failures if ffmpeg hasn't been built according to the README instructions.
-if (project.file("src/main/ffmpeg/include/libavcodec/avcodec.h").exists()) {
+// The native JNI bridge is shipped prebuilt together with the unified FFmpeg
+// libraries in src/main/jniUnified. Building it from source would link against
+// the legacy split FFmpeg libraries and is therefore disabled.
+if (false && project.file("src/main/ffmpeg/include/libavcodec/avcodec.h").exists()) {
   android.externalNativeBuild.cmake.path = file("src/main/jni/CMakeLists.txt")
   // LINT.IfChange
   // Should match cmake_minimum_required.

@@ -26,6 +26,7 @@ import android.net.Uri;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 import androidx.media3.common.DolbyVisionOutputPolicy;
+import androidx.media3.datasource.DataSource;
 import androidx.media3.mpvplayer.options.MpvNetworkOptions;
 import androidx.media3.mpvplayer.options.MpvOptions;
 import androidx.media3.mpvplayer.options.MpvPlayerOptionDefaults;
@@ -47,6 +48,9 @@ public final class MpvPlayerConfig {
   private final @DolbyVisionOutputPolicy.Mode int dolbyVisionOutputPolicy;
   private final boolean dolbyVisionOutputPolicySet;
   private final boolean videoSharpnessSupported;
+  @Nullable private final DataSource.Factory dataSourceFactory;
+  private final int motionInterpolationFps;
+  private final boolean allowMotionInterpolationOutputChange;
 
   private MpvPlayerConfig(Builder builder) {
     this.defaultUserAgent = nullToEmpty(builder.defaultUserAgent);
@@ -59,6 +63,9 @@ public final class MpvPlayerConfig {
     this.dolbyVisionOutputPolicy = builder.dolbyVisionOutputPolicy;
     this.dolbyVisionOutputPolicySet = builder.dolbyVisionOutputPolicySet;
     this.videoSharpnessSupported = builder.videoSharpnessSupported;
+    this.dataSourceFactory = builder.dataSourceFactory;
+    this.motionInterpolationFps = builder.motionInterpolationFps;
+    this.allowMotionInterpolationOutputChange = builder.allowMotionInterpolationOutputChange;
   }
 
   private static void applyStrings(
@@ -116,6 +123,22 @@ public final class MpvPlayerConfig {
     return videoSharpnessSupported;
   }
 
+  /** Returns the data source factory used for network access, or {@code null}. */
+  @Nullable
+  public DataSource.Factory getDataSourceFactory() {
+    return dataSourceFactory;
+  }
+
+  /** Returns the configured motion interpolation frame rate, or 0 when disabled. */
+  public int getMotionInterpolationFps() {
+    return motionInterpolationFps;
+  }
+
+  /** Returns whether the video output may change to support motion interpolation. */
+  public boolean isAllowMotionInterpolationOutputChange() {
+    return allowMotionInterpolationOutputChange;
+  }
+
   @Nullable
   @RestrictTo(LIBRARY_GROUP)
   public String getRequestedPassthroughCodecs() {
@@ -168,6 +191,9 @@ public final class MpvPlayerConfig {
         DolbyVisionOutputPolicy.AUTO;
     private boolean dolbyVisionOutputPolicySet;
     private boolean videoSharpnessSupported = true;
+    @Nullable private DataSource.Factory dataSourceFactory;
+    private int motionInterpolationFps;
+    private boolean allowMotionInterpolationOutputChange;
     private boolean buildCalled;
 
     private static void addString(List<StringOption> options, String name, String value) {
@@ -229,6 +255,39 @@ public final class MpvPlayerConfig {
     public Builder setVideoSharpnessSupported(boolean videoSharpnessSupported) {
       checkState(!buildCalled);
       this.videoSharpnessSupported = videoSharpnessSupported;
+      return this;
+    }
+
+    /** Sets the data source factory used for network access. */
+    @CanIgnoreReturnValue
+    public Builder setDataSourceFactory(@Nullable DataSource.Factory dataSourceFactory) {
+      checkState(!buildCalled);
+      this.dataSourceFactory = dataSourceFactory;
+      return this;
+    }
+
+    /** Sets the font directories used for subtitles. */
+    @CanIgnoreReturnValue
+    public Builder setDefaultFontDirectories(File fontsDirectory, File fallbackFontsDirectory) {
+      checkState(!buildCalled);
+      addSubtitleStringOption("sub-fonts-dir", checkNotNull(fontsDirectory).getAbsolutePath());
+      return this;
+    }
+
+    /** Sets the motion interpolation frame rate, or 0 to disable interpolation. */
+    @CanIgnoreReturnValue
+    public Builder setMotionInterpolationFps(int motionInterpolationFps) {
+      checkState(!buildCalled);
+      checkArgument(motionInterpolationFps >= 0);
+      this.motionInterpolationFps = motionInterpolationFps;
+      return this;
+    }
+
+    /** Sets whether the video output may change to support motion interpolation. */
+    @CanIgnoreReturnValue
+    public Builder setAllowMotionInterpolationOutputChange(boolean allowed) {
+      checkState(!buildCalled);
+      this.allowMotionInterpolationOutputChange = allowed;
       return this;
     }
 
@@ -306,6 +365,13 @@ public final class MpvPlayerConfig {
 
     public MpvPlayerConfig build() {
       checkState(!buildCalled);
+      if (motionInterpolationFps > 0) {
+        addPreInitStringOption("interpolation", "yes");
+        addPreInitStringOption("tscale", "oversample");
+        if (allowMotionInterpolationOutputChange) {
+          addPreInitStringOption("video-sync", "display-resample");
+        }
+      }
       buildCalled = true;
       return new MpvPlayerConfig(this);
     }
