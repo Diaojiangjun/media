@@ -11,17 +11,34 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+import java.util.Properties
+
 plugins { id("media3.android-library") }
+
+val nativeDependencies =
+  Properties().apply {
+    file(
+        "src/main/resources/META-INF/androidx.media3.decoder.ffmpeg/native-dependencies.properties"
+      )
+      .inputStream()
+      .use(::load)
+  }
 
 android {
   namespace = "androidx.media3.decoder.ffmpeg"
+  ndkVersion = nativeDependencies.getProperty("android.ndk.version")
 
-  sourceSets { getByName("androidTest").assets.directories.add("../test_data/src/test/assets") }
+  defaultConfig { ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") } }
+
+  sourceSets {
+    getByName("main").jniLibs.setSrcDirs(listOf("src/main/jniUnified2"))
+    getByName("androidTest").assets.directories.add("../test_data/src/test/assets")
+  }
 }
 
-// Configure the native build only if ffmpeg is present to avoid gradle sync
-// failures if ffmpeg hasn't been built according to the README instructions.
-if (project.file("src/main/jni/ffmpeg").exists()) {
+// The JNI bridge is built from source and links against the unified
+// libffmpeg.so shipped in src/main/jniUnified2.
+if (project.file("src/main/ffmpeg/include/libavcodec/avcodec.h").exists()) {
   android.externalNativeBuild.cmake.path = file("src/main/jni/CMakeLists.txt")
   // LINT.IfChange
   // Should match cmake_minimum_required.

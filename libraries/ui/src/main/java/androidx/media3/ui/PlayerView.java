@@ -35,8 +35,10 @@ import android.content.res.TypedArray;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
+import android.graphics.Rect;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.opengl.GLSurfaceView;
 import android.os.Handler;
 import android.os.Looper;
@@ -62,6 +64,7 @@ import androidx.core.content.ContextCompat;
 import androidx.media3.common.AdOverlayInfo;
 import androidx.media3.common.AdViewProvider;
 import androidx.media3.common.C;
+import androidx.media3.common.DiscMenuController;
 import androidx.media3.common.ErrorMessageProvider;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackException;
@@ -69,6 +72,7 @@ import androidx.media3.common.Player;
 import androidx.media3.common.Player.DiscontinuityReason;
 import androidx.media3.common.Timeline;
 import androidx.media3.common.Timeline.Period;
+import androidx.media3.common.VideoTransform;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.ViewProvider;
@@ -76,6 +80,9 @@ import androidx.media3.common.text.CueGroup;
 import androidx.media3.common.util.RepeatModeUtil;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.ui.AspectRatioFrameLayout.ResizeMode;
+import androidx.media3.ui.danmaku.DanmakuConfig;
+import androidx.media3.ui.danmaku.DanmakuController;
+import androidx.media3.ui.danmaku.DanmakuView;
 import com.google.common.collect.ImmutableList;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
@@ -86,6 +93,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
+import okhttp3.OkHttpClient;
 import org.checkerframework.checker.nullness.qual.EnsuresNonNullIf;
 
 /**
@@ -148,7 +156,7 @@ import org.checkerframework.checker.nullness.qual.EnsuresNonNullIf;
  *         <li>Default: {@code never}
  *       </ul>
  *   <li><b>{@code resize_mode}</b> - Controls how video and album art is resized within the view.
- *       Valid values are {@code fit}, {@code fixed_width}, {@code fixed_height}, {@code fill} and
+ *       Valid values are {@code fit}, {@code ratio_16_9}, {@code ratio_4_3}, {@code fill} and
  *       {@code zoom}.
  *       <ul>
  *         <li>Corresponding method: {@link #setResizeMode(int)}
@@ -298,24 +306,34 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
 
   private final ComponentListener componentListener;
   @Nullable private final AspectRatioFrameLayout contentFrame;
+  private final MpvOsdSurfaceBridge mpvOsdSurfaceBridge;
   @Nullable private final View shutterView;
-  @Nullable private final View surfaceView;
-  private final boolean surfaceViewIgnoresVideoAspectRatio;
+  @Nullable private View surfaceView;
+  private boolean surfaceViewIgnoresVideoAspectRatio;
+  private VideoTransform videoTransform;
+  private float videoAspectRatioOverride;
   @Nullable private final SurfaceSyncGroupCompatV34 surfaceSyncGroupV34;
   @Nullable private final ImageView imageView;
   @Nullable private final ImageView artworkView;
   @Nullable private final SubtitleView subtitleView;
+  @Nullable private final DanmakuView danmakuView;
+  private final DanmakuController danmakuController;
   @Nullable private final View bufferingView;
   @Nullable private final TextView errorMessageView;
   @Nullable private final PlayerControlView controller;
   @Nullable private final FrameLayout adOverlayFrameLayout;
   @Nullable private final FrameLayout overlayFrameLayout;
+  @Nullable private PlayerDebugView debugView;
   private final Handler mainLooperHandler;
+  private final Rect tempContentFrameBounds;
+  private final Rect tempSubtitleViewBounds;
   @Nullable private final Class<?> exoPlayerClazz;
   @Nullable private final Method setImageOutputMethod;
   @Nullable private final Object imageOutput;
 
   @Nullable private Player player;
+  @Nullable private Player backendPlayer;
+  @Nullable private DiscMenuController discMenuController;
   private boolean useController;
 
   // At most one of controllerVisibilityListener and legacyControllerVisibilityListener is non-null.
@@ -356,9 +374,12 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
 
     componentListener = new ComponentListener();
     mainLooperHandler = new Handler(Looper.getMainLooper());
+    tempContentFrameBounds = new Rect();
+    tempSubtitleViewBounds = new Rect();
 
     if (isInEditMode()) {
       contentFrame = null;
+      mpvOsdSurfaceBridge = new MpvOsdSurfaceBridge(/* contentFrame= */ null);
       shutterView = null;
       surfaceView = null;
       surfaceViewIgnoresVideoAspectRatio = false;
@@ -366,6 +387,8 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
       imageView = null;
       artworkView = null;
       subtitleView = null;
+      danmakuView = null;
+      danmakuController = new DanmakuController();
       bufferingView = null;
       errorMessageView = null;
       controller = null;
@@ -438,6 +461,7 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
     if (contentFrame != null) {
       setResizeModeRaw(contentFrame, resizeMode);
     }
+    mpvOsdSurfaceBridge = new MpvOsdSurfaceBridge(contentFrame);
 
     // Shutter view.
     shutterView = findViewById(R.id.exo_shutter);
@@ -555,6 +579,11 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
       subtitleView.setUserDefaultTextSize();
     }
 
+    // Danmaku view.
+    danmakuView = findViewById(R.id.exo_danmaku);
+    danmakuController = new DanmakuController();
+    danmakuController.setView(danmakuView);
+
     // Buffering view.
     bufferingView = findViewById(R.id.exo_buffering);
     if (bufferingView != null) {
@@ -601,6 +630,50 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
     updateContentDescription();
   }
 
+  public void setRender(int render) {
+    checkState(Looper.myLooper() == Looper.getMainLooper());
+    if (contentFrame == null
+        || (render == 1 && surfaceView instanceof TextureView)
+        || (render != 1
+            && surfaceView instanceof SurfaceView
+            && !(surfaceView instanceof GLSurfaceView))) {
+      return;
+    }
+    @Nullable View oldSurfaceView = surfaceView;
+    if (render == 1) {
+      surfaceView = new TextureView(getContext());
+    } else {
+      SurfaceView view = new SurfaceView(getContext());
+      if (SDK_INT >= 34) {
+        Api34.setSurfaceLifecycleToFollowsAttachment(view);
+      }
+      surfaceView = view;
+    }
+    surfaceView.setOnClickListener(componentListener);
+    surfaceView.setClickable(false);
+    surfaceView.setLayoutParams(
+        new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    contentFrame.addView(surfaceView, 0);
+    surfaceViewIgnoresVideoAspectRatio = false;
+    if (player != null && player.isCommandAvailable(COMMAND_SET_VIDEO_SURFACE)) {
+      if (surfaceView instanceof TextureView) {
+        player.setVideoTextureView((TextureView) surfaceView);
+      } else if (surfaceView instanceof SurfaceView) {
+        player.setVideoSurfaceView((SurfaceView) surfaceView);
+      }
+      if (oldSurfaceView instanceof TextureView) {
+        player.clearVideoTextureView((TextureView) oldSurfaceView);
+      } else if (oldSurfaceView instanceof SurfaceView) {
+        player.clearVideoSurfaceView((SurfaceView) oldSurfaceView);
+      }
+      updateAspectRatio();
+    }
+    if (oldSurfaceView != null) {
+      contentFrame.removeView(oldSurfaceView);
+    }
+  }
+
   /**
    * Switches the view targeted by a given {@link Player}.
    *
@@ -633,6 +706,56 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
   }
 
   /**
+   * Sets the player that renders the video of this view.
+   *
+   * <p>The backend player is normally the player instance the UI media controller forwards to. It
+   * is used by disc menu and subtitle overlays that need direct access to the rendering pipeline.
+   *
+   * @param backendPlayer The backend player, or {@code null} to clear it.
+   */
+  public void setBackendPlayer(@Nullable Player backendPlayer) {
+    this.backendPlayer = backendPlayer;
+  }
+
+  /** Returns the player that renders the video of this view, or {@code null}. */
+  @Nullable
+  public Player getBackendPlayer() {
+    return backendPlayer;
+  }
+
+  /**
+   * Sets the disc menu controller whose overlay is rendered by this view.
+   *
+   * @param discMenuController The controller, or {@code null} to detach it.
+   */
+  public void setDiscMenuController(@Nullable DiscMenuController discMenuController) {
+    this.discMenuController = discMenuController;
+  }
+
+  /** Returns the disc menu controller whose overlay is rendered by this view, or {@code null}. */
+  @Nullable
+  public DiscMenuController getDiscMenuController() {
+    return discMenuController;
+  }
+
+  /**
+   * Dispatches a touch event to the active disc menu overlay.
+   *
+   * @param event The touch event.
+   * @return Whether the event was consumed by the menu.
+   */
+  public boolean dispatchDiscMenuTouchEvent(MotionEvent event) {
+    DiscMenuController controller = discMenuController;
+    if (controller == null || !controller.isActive() || !controller.supportsPointer()) {
+      return false;
+    }
+    if (event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+      return true;
+    }
+    return true;
+  }
+
+  /**
    * Sets the {@link Player} to use.
    *
    * <p>To transition a {@link Player} from targeting one view to another, it's recommended to use
@@ -653,6 +776,9 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
     }
 
     @Nullable Player oldPlayer = this.player;
+    if (debugView != null) {
+      debugView.setPlayer(player);
+    }
     if (oldPlayer != null) {
       oldPlayer.removeListener(componentListener);
       if (oldPlayer.isCommandAvailable(COMMAND_SET_VIDEO_SURFACE)) {
@@ -664,9 +790,11 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
       }
       clearImageOutput(oldPlayer);
     }
+    mpvOsdSurfaceBridge.setPlayer(player);
     if (subtitleView != null) {
       subtitleView.setCues(null);
     }
+    danmakuController.setPlayer(player);
     this.player = player;
     if (useController()) {
       controller.setPlayer(player);
@@ -717,6 +845,23 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
         throw new RuntimeException(e);
       }
     }
+  }
+
+  @Override
+  protected void onAttachedToWindow() {
+    super.onAttachedToWindow();
+    danmakuController.setPlayer(player);
+    danmakuController.setView(danmakuView);
+  }
+
+  @Override
+  protected void onDetachedFromWindow() {
+    super.onDetachedFromWindow();
+    if (debugView != null) {
+      debugView.hide();
+    }
+    danmakuController.setPlayer(null);
+    danmakuController.setView(null);
   }
 
   @Override
@@ -1394,6 +1539,70 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
     return surfaceView;
   }
 
+  /** Returns the current video scale and pan transform. */
+  @UnstableApi
+  public VideoTransform getVideoTransform() {
+    return videoTransform == null ? VideoTransform.DEFAULT : videoTransform;
+  }
+
+  /** Sets the video scale and pan transform. */
+  @UnstableApi
+  public void setVideoTransform(VideoTransform transform) {
+    videoTransform = transform == null ? VideoTransform.DEFAULT : transform;
+    applyVideoTransform(videoTransform);
+  }
+
+  /** Animates to the given video scale and pan transform. */
+  @UnstableApi
+  public void animateVideoTransform(VideoTransform transform, long durationMs) {
+    videoTransform = transform == null ? VideoTransform.DEFAULT : transform;
+    if (contentFrame == null) {
+      return;
+    }
+    contentFrame
+        .animate()
+        .scaleX(videoTransform.scaleX)
+        .scaleY(videoTransform.scaleY)
+        .translationX(videoTransform.panX * contentFrame.getWidth())
+        .translationY(videoTransform.panY * contentFrame.getHeight())
+        .setDuration(Math.max(0, durationMs))
+        .start();
+  }
+
+  /** Finishes any running video transform animation at the current transform. */
+  @UnstableApi
+  public void finishVideoTransformAnimation() {
+    if (contentFrame != null) {
+      contentFrame.animate().cancel();
+    }
+    applyVideoTransform(getVideoTransform());
+  }
+
+  /** Returns the aspect ratio override, or {@code 0} when the media aspect ratio is used. */
+  @UnstableApi
+  public float getVideoAspectRatioOverride() {
+    return videoAspectRatioOverride;
+  }
+
+  /** Overrides the displayed video aspect ratio, or {@code 0} to restore the media ratio. */
+  @UnstableApi
+  public void setVideoAspectRatioOverride(float aspectRatio) {
+    videoAspectRatioOverride = Math.max(0.0f, aspectRatio);
+    if (contentFrame != null && videoAspectRatioOverride > 0.0f) {
+      contentFrame.setAspectRatio(videoAspectRatioOverride);
+    }
+  }
+
+  private void applyVideoTransform(VideoTransform transform) {
+    if (contentFrame == null) {
+      return;
+    }
+    contentFrame.setScaleX(transform.scaleX);
+    contentFrame.setScaleY(transform.scaleY);
+    contentFrame.setTranslationX(transform.panX * contentFrame.getWidth());
+    contentFrame.setTranslationY(transform.panY * contentFrame.getHeight());
+  }
+
   /**
    * Gets the overlay {@link FrameLayout}, which can be populated with UI elements to show on top of
    * the player.
@@ -1407,6 +1616,22 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
     return overlayFrameLayout;
   }
 
+  /** Returns whether the playback debug view is currently visible. */
+  @UnstableApi
+  public boolean isDebugViewVisible() {
+    return debugView != null && debugView.isVisible();
+  }
+
+  /** Toggles the playback debug view. */
+  @UnstableApi
+  public void toggleDebugView() {
+    checkState(Looper.myLooper() == Looper.getMainLooper());
+    if (debugView == null) {
+      debugView = new PlayerDebugView(this);
+    }
+    debugView.toggle(player);
+  }
+
   /**
    * Gets the {@link SubtitleView}.
    *
@@ -1417,6 +1642,58 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
   @Nullable
   public SubtitleView getSubtitleView() {
     return subtitleView;
+  }
+
+  /**
+   * Gets the {@link DanmakuView}.
+   *
+   * @return The {@link DanmakuView}, or {@code null} if the layout has been customized and the
+   *     danmaku view is not present.
+   */
+  @UnstableApi
+  @Nullable
+  public DanmakuView getDanmakuView() {
+    return danmakuView;
+  }
+
+  /** Returns the {@link DanmakuController} currently attached to this view. */
+  @UnstableApi
+  public DanmakuController getDanmakuController() {
+    return danmakuController;
+  }
+
+  /** Sets the {@link OkHttpClient} used to fetch HTTP/HTTPS danmaku sources. */
+  @UnstableApi
+  public void setDanmakuOkHttpClient(@Nullable OkHttpClient client) {
+    danmakuController.setOkHttpClient(client);
+  }
+
+  /** Sets the danmaku source URI, or {@code null} to clear the current danmaku items. */
+  @UnstableApi
+  public void setDanmakuSource(@Nullable Uri uri) {
+    if (danmakuView == null && uri != null) {
+      danmakuController.clearItems();
+      return;
+    }
+    danmakuController.setDataSource(uri);
+  }
+
+  /** Sets the danmaku rendering configuration. */
+  @UnstableApi
+  public void setDanmakuConfig(DanmakuConfig config) {
+    danmakuController.setConfig(config);
+  }
+
+  /** Sets whether danmaku rendering is enabled. */
+  @UnstableApi
+  public void setDanmakuEnabled(boolean enabled) {
+    danmakuController.setEnabled(enabled);
+  }
+
+  /** Sends a danmaku item at the current playback position. */
+  @UnstableApi
+  public void sendDanmaku(String text) {
+    danmakuController.sendNow(text);
   }
 
   @Override
@@ -1472,6 +1749,23 @@ public class PlayerView extends FrameLayout implements AdViewProvider {
       @Nullable AspectRatioFrameLayout contentFrame, float aspectRatio) {
     if (contentFrame != null) {
       contentFrame.setAspectRatio(aspectRatio);
+    }
+  }
+
+  @Override
+  protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+    super.onLayout(changed, left, top, right, bottom);
+    if (contentFrame != null && subtitleView != null) {
+      tempContentFrameBounds.set(0, 0, contentFrame.getWidth(), contentFrame.getHeight());
+      offsetDescendantRectToMyCoords(contentFrame, tempContentFrameBounds);
+      tempSubtitleViewBounds.set(0, 0, subtitleView.getWidth(), subtitleView.getHeight());
+      offsetDescendantRectToMyCoords(subtitleView, tempSubtitleViewBounds);
+      tempContentFrameBounds.offset(-tempSubtitleViewBounds.left, -tempSubtitleViewBounds.top);
+      subtitleView.setVideoViewport(
+          tempContentFrameBounds.left,
+          tempContentFrameBounds.top,
+          tempContentFrameBounds.right,
+          tempContentFrameBounds.bottom);
     }
   }
 

@@ -29,25 +29,32 @@ import androidx.media3.common.Player;
 import androidx.media3.common.util.TimestampAdjuster;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.extractor.amr.AmrExtractor;
+import androidx.media3.extractor.asf.AsfExtractor;
 import androidx.media3.extractor.avi.AviExtractor;
 import androidx.media3.extractor.avif.AvifExtractor;
 import androidx.media3.extractor.bmp.BmpExtractor;
+import androidx.media3.extractor.dsd.DffExtractor;
+import androidx.media3.extractor.dsd.DsfExtractor;
+import androidx.media3.extractor.dts.DtsExtractor;
 import androidx.media3.extractor.flac.FlacExtractor;
 import androidx.media3.extractor.flv.FlvExtractor;
 import androidx.media3.extractor.heif.HeifExtractor;
 import androidx.media3.extractor.jpeg.JpegExtractor;
 import androidx.media3.extractor.mkv.MatroskaExtractor;
+import androidx.media3.extractor.mmt.TlvExtractor;
 import androidx.media3.extractor.mp3.Mp3Extractor;
 import androidx.media3.extractor.mp4.FragmentedMp4Extractor;
 import androidx.media3.extractor.mp4.Mp4Extractor;
 import androidx.media3.extractor.ogg.OggExtractor;
 import androidx.media3.extractor.png.PngExtractor;
+import androidx.media3.extractor.rm.RmExtractor;
 import androidx.media3.extractor.text.DefaultSubtitleParserFactory;
 import androidx.media3.extractor.text.SubtitleParser;
 import androidx.media3.extractor.ts.Ac3Extractor;
 import androidx.media3.extractor.ts.Ac4Extractor;
 import androidx.media3.extractor.ts.AdtsExtractor;
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
+import androidx.media3.extractor.ts.M2tsExtractor;
 import androidx.media3.extractor.ts.PsExtractor;
 import androidx.media3.extractor.ts.TsExtractor;
 import androidx.media3.extractor.ts.TsPayloadReader;
@@ -93,13 +100,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   <li>WEBP ({@link WebpExtractor})
  *   <li>BMP ({@link BmpExtractor})
  *   <li>HEIF ({@link HeifExtractor})
+ *   <li>RM ({@link RmExtractor})
  *   <li>AVIF ({@link AvifExtractor})
+ *   <li>ASF ({@link AsfExtractor})
+ *   <li>M2TS ({@link M2tsExtractor})
+ *   <li>DSF ({@link DsfExtractor})
+ *   <li>DFF ({@link DffExtractor})
+ *   <li>DTS ({@link DtsExtractor})
+ *   <li>MMT/TLV ({@link TlvExtractor})
  *   <li>MIDI, if available, the MIDI extension's {@code androidx.media3.decoder.midi.MidiExtractor}
  *       is used.
  * </ul>
  */
 @UnstableApi
 public final class DefaultExtractorsFactory implements ExtractorsFactory {
+
+  private java.util.Map<String, String> mp4ClearKeys = java.util.Collections.emptyMap();
 
   // Extractors order is optimized according to
   // https://docs.google.com/document/d/1w2mKaWMxfz2Ei8-LdxqbPs1VLe_oudB-eryXXw9OvQQ.
@@ -115,6 +131,7 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
         FileTypes.PS,
         FileTypes.OGG,
         FileTypes.TS,
+        FileTypes.MMT_TLV,
         FileTypes.MATROSKA,
         FileTypes.ADTS,
         FileTypes.AC3,
@@ -122,14 +139,20 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
         FileTypes.MP3,
         // The following extractors are not part of the optimized ordering, and were appended
         // without further analysis.
+        FileTypes.RM,
         FileTypes.AVI,
+        FileTypes.ASF,
         FileTypes.MIDI,
         FileTypes.JPEG,
         FileTypes.PNG,
         FileTypes.WEBP,
         FileTypes.BMP,
         FileTypes.HEIF,
-        FileTypes.AVIF
+        FileTypes.AVIF,
+        FileTypes.M2TS,
+        FileTypes.DSF,
+        FileTypes.DFF,
+        FileTypes.DTS
       };
 
   private static final ExtensionLoader FLAC_EXTENSION_LOADER =
@@ -144,6 +167,7 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
   private @AmrExtractor.Flags int amrFlags;
   private @FlacExtractor.Flags int flacFlags;
   private @MatroskaExtractor.Flags int matroskaFlags;
+  private @MatroskaExtractor.Flags int matroskaHttpFlags;
   private @Mp4Extractor.Flags int mp4Flags;
   private @FragmentedMp4Extractor.Flags int fragmentedMp4Flags;
   private @Mp3Extractor.Flags int mp3Flags;
@@ -161,7 +185,7 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
   public DefaultExtractorsFactory() {
     tsMode = TsExtractor.MODE_SINGLE_PMT;
     tsTimestampSearchBytes = TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES;
-    subtitleParserFactory = new DefaultSubtitleParserFactory();
+    subtitleParserFactory = DefaultSubtitleParserFactory.createForExtraction();
     textTrackTranscodingEnabled = true;
     codecsToParseWithinGopSampleDependencies = C.VIDEO_CODEC_FLAG_H264 | C.VIDEO_CODEC_FLAG_H265;
   }
@@ -283,6 +307,20 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
   }
 
   /**
+   * Sets additional flags for {@link MatroskaExtractor} instances used for HTTP sources.
+   *
+   * @see MatroskaExtractor#MatroskaExtractor(SubtitleParser.Factory, int)
+   * @param flags The flags to use.
+   * @return The factory, for convenience.
+   */
+  @CanIgnoreReturnValue
+  public synchronized DefaultExtractorsFactory setMatroskaExtractorFlagsForHttpSources(
+      @MatroskaExtractor.Flags int flags) {
+    this.matroskaHttpFlags = flags;
+    return this;
+  }
+
+  /**
    * Sets flags for {@link Mp4Extractor} instances created by the factory.
    *
    * @see Mp4Extractor#Mp4Extractor(SubtitleParser.Factory, int)
@@ -377,6 +415,22 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
       int timestampSearchBytes) {
     tsTimestampSearchBytes = timestampSearchBytes;
     return this;
+  }
+
+  /** Sets MP4 ClearKey licenses used by the extractors. */
+  @CanIgnoreReturnValue
+  public synchronized DefaultExtractorsFactory setMp4ClearKeys(
+      java.util.Map<String, String> clearKeys) {
+    this.mp4ClearKeys =
+        clearKeys == null
+            ? java.util.Collections.emptyMap()
+            : new java.util.LinkedHashMap<>(clearKeys);
+    return this;
+  }
+
+  /** Returns the configured MP4 ClearKey licenses. */
+  public synchronized java.util.Map<String, String> getMp4ClearKeys() {
+    return mp4ClearKeys;
   }
 
   /**
@@ -522,6 +576,7 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
             new MatroskaExtractor(
                 subtitleParserFactory,
                 matroskaFlags
+                    | matroskaHttpFlags
                     | (textTrackTranscodingEnabled
                         ? 0
                         : MatroskaExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA)));
@@ -598,6 +653,9 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
                 (textTrackTranscodingEnabled ? 0 : AviExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA),
                 subtitleParserFactory));
         break;
+      case FileTypes.ASF:
+        extractors.add(new AsfExtractor());
+        break;
       case FileTypes.PNG:
         extractors.add(new PngExtractor());
         break;
@@ -612,6 +670,27 @@ public final class DefaultExtractorsFactory implements ExtractorsFactory {
         break;
       case FileTypes.AVIF:
         extractors.add(new AvifExtractor());
+        break;
+      case FileTypes.RM:
+        extractors.add(new RmExtractor());
+        break;
+      case FileTypes.M2TS:
+        extractors.add(new M2tsExtractor(subtitleParserFactory));
+        break;
+      case FileTypes.DSF:
+        extractors.add(new DsfExtractor());
+        break;
+      case FileTypes.DFF:
+        extractors.add(new DffExtractor());
+        break;
+      case FileTypes.DTS:
+        extractors.add(new DtsExtractor());
+        break;
+      case FileTypes.MMT_TLV:
+        extractors.add(
+            new TlvExtractor(
+                subtitleParserFactory,
+                textTrackTranscodingEnabled ? 0 : TlvExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA));
         break;
       case FileTypes.WEBVTT:
       case FileTypes.UNKNOWN:

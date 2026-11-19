@@ -636,6 +636,8 @@ public final class DefaultPreloadManager
   @Nullable private final PreCacheHelper.Factory preCacheHelperFactory;
   private final HandlerWrapper preloadHandler;
   private boolean releaseCalled;
+  private int dolbyVisionOutputPolicy;
+  private boolean audioPassthroughEnabled;
 
   private DefaultPreloadManager(Builder builder) {
     super(
@@ -689,6 +691,34 @@ public final class DefaultPreloadManager
     SimpleRankingDataComparator rankingDataComparator =
         (SimpleRankingDataComparator) this.rankingDataComparator;
     rankingDataComparator.setCurrentPlayingIndex(currentPlayingIndex);
+  }
+
+  /**
+   * Sets the Dolby Vision output policy used by subsequent preloads.
+   *
+   * @param policy The policy, one of the {@code DolbyVisionOutputPolicy} constants.
+   */
+  public void setDolbyVisionOutputPolicy(int policy) {
+    this.dolbyVisionOutputPolicy = policy;
+  }
+
+  /**
+   * Enables or disables audio passthrough for subsequent preloads.
+   *
+   * @param enabled Whether passthrough is enabled.
+   */
+  public void setAudioPassthroughEnabled(boolean enabled) {
+    this.audioPassthroughEnabled = enabled;
+  }
+
+  /** Returns the Dolby Vision output policy used for preloading. */
+  public int getDolbyVisionOutputPolicy() {
+    return dolbyVisionOutputPolicy;
+  }
+
+  /** Returns whether audio passthrough is enabled for preloading. */
+  public boolean isAudioPassthroughEnabled() {
+    return audioPassthroughEnabled;
   }
 
   @Override
