@@ -27,7 +27,7 @@ project(libffmpegJNI C CXX)
 
 set(decoder_ffmpeg_main "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set(ffmpeg_include "${decoder_ffmpeg_main}/ffmpeg/include")
-set(ffmpeg_binaries "${decoder_ffmpeg_main}/jniLibs/${ANDROID_ABI}")
+set(ffmpeg_binaries "${decoder_ffmpeg_main}/jniUnified2/${ANDROID_ABI}")
 set(renderer_sdk "${decoder_ffmpeg_main}/renderer-sdk/${ANDROID_ABI}")
 set(libplacebo_include "${renderer_sdk}/include")
 set(libplacebo_archive "${renderer_sdk}/lib/libplacebo.a")
@@ -38,7 +38,7 @@ if(supported_ffmpeg_abi_index EQUAL -1)
     message(FATAL_ERROR "Unsupported FFmpeg ABI: ${ANDROID_ABI}")
 endif()
 
-foreach(ffmpeg_lib avutil swresample avcodec avformat)
+foreach(ffmpeg_lib ffmpeg)
     set(ffmpeg_lib_filename lib${ffmpeg_lib}.so)
     set(ffmpeg_lib_file_path ${ffmpeg_binaries}/${ffmpeg_lib_filename})
     if(NOT EXISTS "${ffmpeg_lib_file_path}")
@@ -98,10 +98,7 @@ target_compile_definitions(ffmpegJNI
 
 target_link_libraries(ffmpegJNI
                       PRIVATE android
-                      PRIVATE swresample
-                      PRIVATE avcodec
-                      PRIVATE avformat
-                      PRIVATE avutil
+                      PRIVATE ffmpeg
                       PRIVATE libplacebo
                       PRIVATE ${android_egl_lib}
                       PRIVATE ${android_gles_lib}

@@ -90,6 +90,7 @@ import androidx.media3.common.VideoSize;
 import androidx.media3.common.audio.AudioBecomingNoisyManager;
 import androidx.media3.common.text.Cue;
 import androidx.media3.common.text.CueGroup;
+import androidx.media3.common.text.SubtitleOffsets;
 import androidx.media3.common.util.BackgroundThreadStateHandler;
 import androidx.media3.common.util.Clock;
 import androidx.media3.common.util.ConditionVariable;
@@ -255,6 +256,7 @@ import java.util.function.IntConsumer;
   private float unmuteVolume;
   private long audioOffsetMs;
   private long textOffsetMs;
+  private SubtitleOffsets subtitleOffsets = SubtitleOffsets.ZERO;
   private boolean skipSilenceEnabled;
   private CueGroup currentCueGroup;
   @Nullable private VideoFrameMetadataListener videoFrameMetadataListener;
@@ -1799,6 +1801,22 @@ import java.util.function.IntConsumer;
   public long getTextOffsetMs() {
     verifyApplicationThread();
     return textOffsetMs;
+  }
+
+  @Override
+  public SubtitleOffsets getSubtitleOffsets() {
+    verifyApplicationThread();
+    return new SubtitleOffsets(textOffsetMs, subtitleOffsets.secondaryMs);
+  }
+
+  @Override
+  public void setSubtitleOffsets(SubtitleOffsets offsets) {
+    verifyApplicationThread();
+    if (subtitleOffsets.secondaryMs == offsets.secondaryMs && textOffsetMs == offsets.primaryMs) {
+      return;
+    }
+    subtitleOffsets = offsets;
+    setTextOffsetMs(offsets.primaryMs);
   }
 
   @Override
